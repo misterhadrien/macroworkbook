@@ -17,7 +17,7 @@ EXCEL_FILENAME = "audit_trail_export.xlsx"
 TABLE_SELECTOR = "div#audittrail_0_auditreport_0 table.contentBorder"
 ROWS_SELECTOR = "table.contentBorder tr.contentBackground"
 NEXT_BUTTON_NAME = "audittrail_0_pager1_next_0"
-column_names = ["Document", "Date", "Time Zone", "Version", "User", "Event"]
+column_names = ["Document", "Title", "Date", "Time Zone", "Version", "User", "Event"]
 user32 = ctypes.windll.user32
 screen_width = user32.GetSystemMetrics(0)
 screen_height = user32.GetSystemMetrics(1)
@@ -49,6 +49,7 @@ def search_document_by_name(document_name, current_index, total_documents, js_co
         old_row = None
     driver.switch_to.default_content()
     driver.switch_to.frame(1)
+    title_text = None
     try:
         search_box = WebDriverWait(driver, 10).until(
             EC.presence_of_element_located((By.ID, "txtSearch"))
@@ -81,6 +82,14 @@ def search_document_by_name(document_name, current_index, total_documents, js_co
                 if len(exact_matches) == 1:
                     print(f"\033[92m✅ Found and opening Audit Trail of {document_name}\033[0m")
                     exact_matches[0].click()
+                    if len(tds) >= 5:
+                        try:
+                            title_span = tds[4].find_element(By.CSS_SELECTOR, "span.dmfStrLenFrmtr > span[title]")
+                            title_text = title_span.get_attribute("title")
+                        except Exception:
+                            title_text = None
+                    else:
+                        title_text = ""  
                 else:
                     if len(exact_matches) > 1:
                         print(f"\033[93m⚠️ Multiple exact matches for '{document_name}'\033[0m")
@@ -93,19 +102,30 @@ def search_document_by_name(document_name, current_index, total_documents, js_co
                         WebDriverWait(driver, 120).until(
                             EC.presence_of_element_located((By.CSS_SELECTOR, "tr.selectable.selected"))
                         )
+                        selected_row = driver.find_element(By.CSS_SELECTOR, "tr.selectable.selected")
+                        tds = selected_row.find_elements(By.TAG_NAME, "td")
+                        title_text = None
+                        if len(tds) >= 5:
+                            try:
+                                title_span = tds[4].find_element(By.CSS_SELECTOR, "span.dmfStrLenFrmtr > span[title]")
+                                title_text = title_span.get_attribute("title")
+                            except Exception:
+                                title_text = None
                     except TimeoutException:
                         print("\033[91m❌ Timeout: No row was selected.\033[0m")
                         return
-                    
             except StaleElementReferenceException:
                 continue
             driver.execute_script(js_code)
+        return title_text
     except TimeoutException:
         print(f"\033[91m⏳ Timeout while searching for '{document_name}'\033[0m")
+        return None
     except Exception as e:
         print(f"\033[91m❌ Error while searching for {document_name}: {e}\033[0m")
+        return None
 
-def extract_all_pages():
+def extract_all_pages(title):
     audit_data = []
     page = 1
     while True:
@@ -126,6 +146,7 @@ def extract_all_pages():
                 cells = row.find_elements(By.TAG_NAME, "td")
                 row_data = [cell.text.strip() for cell in cells]
                 row_data.insert(0, document_name)
+                row_data.insert(1, title if title is not None else "")
                 page_data.append(row_data)
             print(f"\033[92m✅ {len(page_data)} rows extracted from Audit Trail Page {page}.\033[0m")
             audit_data.extend(page_data)
@@ -166,7 +187,6 @@ try:
     driver.set_window_position(0, 0)
     driver.get("https://edms.beckman.com/edms/component/main")
     print("\033[94m🔐 Waiting for login to complete...\033[0m")
-
     try:
         WebDriverWait(driver, 300).until(
             EC.invisibility_of_element_located((By.NAME, "Login_Button_0"))
@@ -191,8 +211,10 @@ try:
     js_code = f'fireDynamicActionEvent("{audit_trail_id}")'
     for i, doc_name in enumerate(doc_names):
         try:
-            search_document_by_name(doc_name, i, len(doc_names), js_code)
-            data = extract_all_pages()
+            title = search_document_by_name(doc_name, i, len(doc_names), js_code)
+            if title is None:
+                title = ""
+            data = extract_all_pages(title)
             if data:
                 processed += 1
                 all_data.extend(data)
