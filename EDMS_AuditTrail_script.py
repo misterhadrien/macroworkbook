@@ -47,6 +47,7 @@ def search_document_by_name(document_name, current_index, total_documents, js_co
         )
     except:
         old_row = None
+        
     driver.switch_to.default_content()
     driver.switch_to.frame(1)
     title_text = None
@@ -64,59 +65,69 @@ def search_document_by_name(document_name, current_index, total_documents, js_co
         driver.switch_to.frame(2)
         if old_row:
             WebDriverWait(driver, 10).until(EC.staleness_of(old_row))
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.ID, "Search60_doclistgrid_0_0"))
-        )
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.ID, "Search60_doclistgrid_0_0")),
+            )
+        except TimeoutException:
+            no_data_elements = driver.find_elements(By.ID, "searchnodata")
+            if no_data_elements:
+                print(f"\033[91m❌ No documents found for '{document_name}'.\033[0m")
+                return None
         rows = driver.find_elements(By.CSS_SELECTOR, "tr.selectable")
         exact_matches = []
         partial_matches = []
         for row in rows:
             try:
                 tds = row.find_elements(By.TAG_NAME, "td")
-                for td in tds:
-                    text = td.text.strip()
-                    if text.lower() == document_name.lower():
-                        exact_matches.append(row)
-                    elif document_name.lower() in text.lower():
-                        partial_matches.append(row)
-                if len(exact_matches) == 1:
-                    print(f"\033[92m✅ Found and opening Audit Trail of {document_name}\033[0m")
-                    exact_matches[0].click()
-                    if len(tds) >= 5:
-                        try:
-                            title_span = tds[4].find_element(By.CSS_SELECTOR, "span.dmfStrLenFrmtr > span[title]")
-                            title_text = title_span.get_attribute("title")
-                        except Exception:
-                            title_text = None
-                    else:
-                        title_text = ""  
-                else:
-                    if len(exact_matches) > 1:
-                        print(f"\033[93m⚠️ Multiple exact matches for '{document_name}'\033[0m")
-                    elif partial_matches:
-                        print(f"\033[93m⚠️ Partial matches found for '{document_name}'\033[0m")
-                    else:
-                        print(f"\033[91m❌ No match found for '{document_name}'\033[0m")
-                    print("\033[93m➡️ Please manually select the correct document row...\033[0m")
+                exact_match_found = False
+                partial_match_found = False
+                for i in [2, 4]:  # Only check td[2] and td[4]
                     try:
-                        WebDriverWait(driver, 120).until(
-                            EC.presence_of_element_located((By.CSS_SELECTOR, "tr.selectable.selected"))
-                        )
-                        selected_row = driver.find_element(By.CSS_SELECTOR, "tr.selectable.selected")
-                        tds = selected_row.find_elements(By.TAG_NAME, "td")
-                        title_text = None
-                        if len(tds) >= 5:
-                            try:
-                                title_span = tds[4].find_element(By.CSS_SELECTOR, "span.dmfStrLenFrmtr > span[title]")
-                                title_text = title_span.get_attribute("title")
-                            except Exception:
-                                title_text = None
-                    except TimeoutException:
-                        print("\033[91m❌ Timeout: No row was selected.\033[0m")
-                        return
-            except StaleElementReferenceException:
-                continue
-            driver.execute_script(js_code)
+                        # Try to get full text from span[title]
+                        span = tds[i].find_element(By.CSS_SELECTOR, "span[title]")
+                        text = span.get_attribute("title").strip()
+                    except:
+                        # Fallback to visible text
+                        text = tds[i].text.strip()
+                    if not exact_match_found and text == document_name:
+                        exact_match_found = True
+                    elif not partial_match_found and document_name.lower() in text.lower():
+                        partial_match_found = True
+                if exact_match_found:
+                    exact_matches.append(row)
+                elif partial_match_found:
+                    partial_matches.append(row)
+            except Exception as e:
+                print(f"\033[91m❌ Error while searching for {document_name}: {e}\033[0m")
+                return None
+        if len(exact_matches) == 1:
+            print(f"\033[92m✅ Found and opening Audit Trail of {document_name}\033[0m")
+            exact_matches[0].click()
+        else:
+            if len(exact_matches) > 1:
+                print(f"\033[93m⚠️ Multiple exact matches for '{document_name}'\033[0m")
+            elif partial_matches:
+                print(f"\033[93m⚠️ Partial matches found for '{document_name}'\033[0m")
+            else:
+                print(f"\033[91m❌ No match found for '{document_name}'\033[0m")
+            
+            print("\033[93m➡️ Please manually select the correct document row...\033[0m")
+            try:
+                WebDriverWait(driver, 120).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "tr.selectable.selected"))
+                )
+            except TimeoutException:
+                print("\033[91m❌ Timeout: No row was selected.\033[0m")
+                return None
+        selected_row = driver.find_element(By.CSS_SELECTOR, "tr.selectable.selected")
+        tds = selected_row.find_elements(By.TAG_NAME, "td")
+        try:
+            title_span = tds[4].find_element(By.CSS_SELECTOR, "span.dmfStrLenFrmtr > span[title]")
+            title_text = title_span.get_attribute("title")
+        except:
+            title_text = tds[4].text.strip()
+        driver.execute_script(js_code)
         return title_text
     except TimeoutException:
         print(f"\033[91m⏳ Timeout while searching for '{document_name}'\033[0m")
@@ -160,7 +171,7 @@ def extract_all_pages(title):
                 print("\033[92m➡️ Audit Trail extraction complete.\033[0m")
                 break
         except TimeoutException:
-            print("\033[91m❌ Timeout waiting for audit table.\033[0m")
+            print("\033[91m❌ Timeout waiting for audit trail table.\033[0m")
             break
         except Exception as e:
             print(f"\033[91m❌ Error: {e}\033[0m")
@@ -179,7 +190,7 @@ print("""
 """)
 print("=" * 70 + "\n")
 doc_names = read_document_names_from_txt()
-print(f"\033[92m📚 Loaded {len(doc_names)} documents.\033[0m")
+print(f"\033[92m📚 Loaded {len(doc_names)} document{'s' if len(doc_names) != 1 else ''}.\033[0m")
 try:
     print("\033[92m🌐 Chrome browser will now open. Please log in to EDMS manually.\033[0m")
     driver = webdriver.Chrome(service=service, options=options)
@@ -196,7 +207,18 @@ try:
         driver.quit()
         exit(1)
     print("\033[92m✅ Login successful!\033[0m")
-    time.sleep(0.5)
+    try:
+        # Wait until frame 1 is available and switch to it
+        WebDriverWait(driver, 10).until(lambda d: len(d.find_elements(By.TAG_NAME, "frame")) > 1)
+        driver.switch_to.frame(1)
+        # Wait until search box is present
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "txtSearch"))
+        )
+    except TimeoutException:
+        print("\033[91m❌ Error: Timed out waiting for page to load after login.\033[0m")
+        driver.quit()
+        exit(1)
     all_data = []
     processed = 0
     # Get Audit Trail button ID
@@ -213,7 +235,7 @@ try:
         try:
             title = search_document_by_name(doc_name, i, len(doc_names), js_code)
             if title is None:
-                title = ""
+                continue
             data = extract_all_pages(title)
             if data:
                 processed += 1
@@ -229,7 +251,9 @@ try:
         df = pd.DataFrame(all_data, columns=column_names)
         out_path = os.path.join(os.environ.get("TEMP") or "/tmp", EXCEL_FILENAME)
         df.to_excel(out_path, index=False)
-        print(f"\033[92m📊 Export complete.\033[0m")
+        print(f"\033[92m📊 Export completed successfully.\033[0m")
+        print(f"\033[94m➡️ You may now close this window and return to the Macro Workbook.\033[0m")
+        print(f"\033[94m💡 Then click on 'Get Versions' to continue processing.\033[0m")
     else:
         print("\033[91m❌ Error: No data to export.\033[0m")
 except WebDriverException as e:
