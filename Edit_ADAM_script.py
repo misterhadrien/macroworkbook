@@ -92,7 +92,7 @@ for cookie in driver.get_cookies():
 # 3️ Process first table for adam assay informations
 # =========================================================
 if os.path.exists(Table1_path):
-    df = pd.read_csv(Table1_path)
+    df = pd.read_csv(Table1_path, encoding="latin1")
     for _, row in df.iterrows():
         raw_status = safe_str(row["Status"]).strip()
         mapped_status = status_map.get(raw_status, raw_status)
@@ -116,7 +116,7 @@ if os.path.exists(Table1_path):
 # 4 Process second table for run order reagent packs
 # =========================================================
 if os.path.exists(Table2_path):
-    df = pd.read_csv(Table2_path)
+    df = pd.read_csv(Table2_path, encoding="latin1")
     # Group by Assay to combine multiple Reagent Packs
     grouped = df.groupby("Assay")
     for assay_key, group in grouped:
@@ -154,7 +154,7 @@ if os.path.exists(Table2_path):
 # 5 Process third table for samples run order
 # =========================================================
 if os.path.exists(Table3_path):
-    df = pd.read_csv(Table3_path)
+    df = pd.read_csv(Table3_path, encoding="latin1")
     # Group by Assay to combine multiple Reagent Packs
     grouped = df.groupby("Assay")
     for assay_key, group in grouped:
