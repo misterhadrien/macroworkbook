@@ -3,196 +3,262 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.common.exceptions import TimeoutException, WebDriverException
+from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
 from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.keys import Keys
+from selenium.common.exceptions import StaleElementReferenceException
 from datetime import datetime
 import pandas as pd
 import time
 import os
 import ctypes
-import requests
-import json
-import urllib3
 
 # ---- Settings ----
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+EXCEL_FILENAME = "audit_trail_export.xlsx"
+TABLE_SELECTOR = "div#audittrail_0_auditreport_0 table.contentBorder"
+ROWS_SELECTOR = "table.contentBorder tr.contentBackground"
+NEXT_BUTTON_NAME = "audittrail_0_pager1_next_0"
+column_names = ["Document", "Title", "Date", "Time Zone", "Version", "User", "Event"]
 user32 = ctypes.windll.user32
 screen_width = user32.GetSystemMetrics(0)
 screen_height = user32.GetSystemMetrics(1)
+
+# ---- Setup ----
 options = webdriver.ChromeOptions()
 options.add_argument("--log-level=3")
 service = Service()
-temp_path = os.environ.get("TEMP") or "/tmp"
-Table1_path = os.path.join(temp_path, "Edit_ADAM_Table1.csv")
-Table2_path = os.path.join(temp_path, "Edit_ADAM_Table2.csv")
-Table3_path = os.path.join(temp_path, "Edit_ADAM_Table3.csv")
-status_map = {
-    "Pending": "PEND",
-    "Confirmed": "CONF",
-    "Assay Split": "SPLIT",
-    "Rejected": "RJTD",
-    "Cancelled": "CANC"
-}
-urlSaveAssay = "https://locadampapp01.beckman.com:8443/adamWebTier/app/saveAssay"
-urlSaveRunOrder = "https://locadampapp01.beckman.com:8443/adamWebTier/app/saveRunorder"
-headers = {"Content-Type": "application/json"}
-def safe_str(value):
-    #"""Convert values safely for JSON payloads."""
-    if pd.isna(value) or str(value).strip().lower() == "nan":
-        return ""
-    if isinstance(value, float) and value.is_integer():
-        return str(int(value))
-    return str(value).strip()
-    
-# =========================================================
-# 1️ Open Chrome and wait for manual login
-# =========================================================
+
+def read_document_names_from_txt():
+    temp_path = os.environ.get("TEMP") or "/tmp"
+    txt_path = os.path.join(temp_path, "EDMS_documents_names.txt")
+    if not os.path.exists(txt_path):
+        print(f"\033[91m❌ Error: Document names not found.\033[0m")
+        exit(1)
+    with open(txt_path, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip()]
+
+def search_document_by_name(document_name, current_index, total_documents, js_code):
+    driver.switch_to.default_content()
+    driver.switch_to.frame(2)
+    driver.switch_to.frame(2)
+    driver.switch_to.frame(2)
+    try:
+        old_row = WebDriverWait(driver, 3).until(
+            EC.presence_of_element_located((By.ID, "Search60_doclistgrid_0_0"))
+        )
+    except:
+        old_row = None
+        
+    driver.switch_to.default_content()
+    driver.switch_to.frame(1)
+    title_text = None
+    try:
+        search_box = WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "txtSearch"))
+        )
+        search_box.clear()
+        search_box.send_keys(document_name)
+        search_box.send_keys(Keys.ENTER)
+        print(f"\033[94m🔍 Searching for document {current_index + 1} of {total_documents}: {document_name}\033[0m")
+        driver.switch_to.default_content()
+        driver.switch_to.frame(2)
+        driver.switch_to.frame(2)
+        driver.switch_to.frame(2)
+        if old_row:
+            WebDriverWait(driver, 10).until(EC.staleness_of(old_row))
+        try:
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.ID, "Search60_doclistgrid_0_0")),
+            )
+        except TimeoutException:
+            no_data_elements = driver.find_elements(By.ID, "searchnodata")
+            if no_data_elements:
+                print(f"\033[91m❌ No documents found for '{document_name}'.\033[0m")
+                return None
+        rows = driver.find_elements(By.CSS_SELECTOR, "tr.selectable")
+        exact_matches = []
+        partial_matches = []
+        for row in rows:
+            try:
+                tds = row.find_elements(By.TAG_NAME, "td")
+                exact_match_found = False
+                partial_match_found = False
+                for i in [2, 4]:  # Only check td[2] and td[4]
+                    try:
+                        # Try to get full text from span[title]
+                        span = tds[i].find_element(By.CSS_SELECTOR, "span[title]")
+                        text = span.get_attribute("title").strip()
+                    except:
+                        # Fallback to visible text
+                        text = tds[i].text.strip()
+                    if not exact_match_found and text == document_name:
+                        exact_match_found = True
+                    elif not partial_match_found and document_name.lower() in text.lower():
+                        partial_match_found = True
+                if exact_match_found:
+                    exact_matches.append(row)
+                elif partial_match_found:
+                    partial_matches.append(row)
+            except Exception as e:
+                print(f"\033[91m❌ Error while searching for {document_name}: {e}\033[0m")
+                return None
+        if len(exact_matches) == 1:
+            print(f"\033[92m✅ Found and opening Audit Trail of {document_name}\033[0m")
+            exact_matches[0].click()
+        else:
+            if len(exact_matches) > 1:
+                print(f"\033[93m⚠️ Multiple exact matches for '{document_name}'\033[0m")
+            elif partial_matches:
+                print(f"\033[93m⚠️ Partial matches found for '{document_name}'\033[0m")
+            else:
+                print(f"\033[91m❌ No match found for '{document_name}'\033[0m")
+            
+            print("\033[93m➡️ Please manually select the correct document row...\033[0m")
+            try:
+                WebDriverWait(driver, 120).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "tr.selectable.selected"))
+                )
+            except TimeoutException:
+                print("\033[91m❌ Timeout: No row was selected.\033[0m")
+                return None
+        selected_row = driver.find_element(By.CSS_SELECTOR, "tr.selectable.selected")
+        tds = selected_row.find_elements(By.TAG_NAME, "td")
+        try:
+            title_span = tds[4].find_element(By.CSS_SELECTOR, "span.dmfStrLenFrmtr > span[title]")
+            title_text = title_span.get_attribute("title")
+        except:
+            title_text = tds[4].text.strip()
+        driver.execute_script(js_code)
+        return title_text
+    except TimeoutException:
+        print(f"\033[91m⏳ Timeout while searching for '{document_name}'\033[0m")
+        return None
+    except Exception as e:
+        print(f"\033[91m❌ Error while searching for {document_name}: {e}\033[0m")
+        return None
+
+def extract_all_pages(title):
+    audit_data = []
+    page = 1
+    while True:
+        try:
+            driver.switch_to.default_content()
+            driver.switch_to.frame(2)
+            driver.switch_to.frame(2)
+            driver.switch_to.frame(2)
+            driver.switch_to.frame(0)
+            WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.CSS_SELECTOR, TABLE_SELECTOR))
+            )
+            rows = driver.find_elements(By.CSS_SELECTOR, ROWS_SELECTOR)
+            doc_name_element = driver.find_element(By.CLASS_NAME, "dialogFileName")
+            document_name = doc_name_element.text.strip()
+            page_data = []
+            for row in rows:
+                cells = row.find_elements(By.TAG_NAME, "td")
+                row_data = [cell.text.strip() for cell in cells]
+                row_data.insert(0, document_name)
+                row_data.insert(1, title if title is not None else "")
+                page_data.append(row_data)
+            print(f"\033[92m✅ {len(page_data)} rows extracted from Audit Trail Page {page}.\033[0m")
+            audit_data.extend(page_data)
+            page += 1
+            try:
+                next_button = driver.find_element(By.NAME, NEXT_BUTTON_NAME)
+                old_table = driver.find_element(By.CSS_SELECTOR, TABLE_SELECTOR)
+                driver.execute_script("arguments[0].click();", next_button)
+                WebDriverWait(driver, 10).until(EC.staleness_of(old_table))
+            except NoSuchElementException:
+                print("\033[92m➡️ Audit Trail extraction complete.\033[0m")
+                break
+        except TimeoutException:
+            print("\033[91m❌ Timeout waiting for audit trail table.\033[0m")
+            break
+        except Exception as e:
+            print(f"\033[91m❌ Error: {e}\033[0m")
+            break
+    return audit_data
+
+# ---- Main Execution ----
 print("\n" + "=" * 70)
-print("📄  ADAM Editor - Macro Workbook 🧾".center(70))
+print("📄  EDMS Audit Trail Extractor - Macro Workbook 🧾".center(70))
 print("=" * 70)
 print("""
-🔐  You will log in to ADAM manually.
-🔄  After login, please wait until the script finish.
+🔐  You will log in to EDMS manually.
+🔄  All Audit Trail pages for each documents are processed automatically.
+📌  If no exact match is found during document search,
+    you must manually select the correct document in the list.
 """)
 print("=" * 70 + "\n")
+doc_names = read_document_names_from_txt()
+print(f"\033[92m📚 Loaded {len(doc_names)} document{'s' if len(doc_names) != 1 else ''}.\033[0m")
 try:
-    print("\033[92m🌐 Chrome browser will now open. Please log in to ADAM manually.\033[0m")
+    print("\033[92m🌐 Chrome browser will now open. Please log in to EDMS manually.\033[0m")
     driver = webdriver.Chrome(service=service, options=options)
     driver.set_window_size(screen_width // 2, screen_height)
     driver.set_window_position(0, 0)
-    driver.get("https://locadampapp01.beckman.com:8443/adamWebTier/login")
+    driver.get("https://edms.beckman.com/edms/component/main")
     print("\033[94m🔐 Waiting for login to complete...\033[0m")
     try:
-        user_id_element = WebDriverWait(driver, 300).until(
-            EC.presence_of_element_located((By.ID, "userIdData"))
+        WebDriverWait(driver, 300).until(
+            EC.invisibility_of_element_located((By.NAME, "Login_Button_0"))
         )
     except TimeoutException:
         print("\033[91m❌ Error: Login timed out.\033[0m")
         driver.quit()
         exit(1)
     print("\033[92m✅ Login successful!\033[0m")
-    user_id = user_id_element.get_attribute("value")
+    try:
+        # Wait until frame 1 is available and switch to it
+        WebDriverWait(driver, 10).until(lambda d: len(d.find_elements(By.TAG_NAME, "frame")) > 1)
+        driver.switch_to.frame(1)
+        # Wait until search box is present
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.ID, "txtSearch"))
+        )
+    except TimeoutException:
+        print("\033[91m❌ Error: Timed out waiting for page to load after login.\033[0m")
+        driver.quit()
+        exit(1)
+    all_data = []
+    processed = 0
+    # Get Audit Trail button ID
+    driver.switch_to.default_content()
+    driver.switch_to.frame(2)
+    driver.switch_to.frame(2)
+    driver.switch_to.frame(1)
+    menu_bar_form = driver.find_element(By.ID, "MenuBar_0")
+    client_id_full = menu_bar_form.find_element(By.NAME, "__dmfRequestId").get_attribute("value")
+    client_id_prefix = client_id_full.split("~~")[0]
+    audit_trail_id = client_id_prefix + "_MenuBar_doc_audittrail_0"
+    js_code = f'fireDynamicActionEvent("{audit_trail_id}")'
+    for i, doc_name in enumerate(doc_names):
+        try:
+            title = search_document_by_name(doc_name, i, len(doc_names), js_code)
+            if title is None:
+                continue
+            data = extract_all_pages(title)
+            if data:
+                processed += 1
+                all_data.extend(data)
+                ok_button = driver.find_element(By.NAME, "ComboContainer_cancel_0")
+                ok_button.click()
+            else:
+                print("\033[91m⚠️ No rows found in Audit Trail.\033[0m")
+        except Exception as e:
+            print(f"\033[91m❌ Error processing {doc_name}: {e}\033[0m")
+    driver.quit()
+    if all_data:
+        df = pd.DataFrame(all_data, columns=column_names)
+        out_path = os.path.join(os.environ.get("TEMP") or "/tmp", EXCEL_FILENAME)
+        df.to_excel(out_path, index=False)
+        print(f"\033[92m📊 Export completed successfully.\033[0m")
+        print(f"\033[94m➡️ You may now close this window and return to the Macro Workbook.\033[0m")
+        print(f"\033[94m💡 Then click on 'Get Versions' to continue processing.\033[0m")
+    else:
+        print("\033[91m❌ Error: No data to export.\033[0m")
 except WebDriverException as e:
-    time.sleep(1)
     print("\n\033[91m❌ Error: Chrome browser was closed unexpectedly.\033[0m")
-    time.sleep(5)
 except Exception as e:
-    time.sleep(1)
     print(f"\033[91m❌ Error: An unexpected error occurred: {e}\033[0m")
-    time.sleep(5)
-
-# =========================================================
-# 2️ Extract cookies from Selenium to reuse with requests
-# =========================================================
-session = requests.Session()
-for cookie in driver.get_cookies():
-    session.cookies.set(cookie['name'], cookie['value'])
-
-# =========================================================
-# 3️ Process first table for adam assay informations
-# =========================================================
-if os.path.exists(Table1_path):
-    df = pd.read_csv(Table1_path, encoding="latin1")
-    for _, row in df.iterrows():
-        raw_status = safe_str(row["Status"]).strip()
-        mapped_status = status_map.get(raw_status, raw_status)
-        payload = {
-            "assayKey": safe_str(row["Assay"]),
-            "assayDesc": safe_str(row["Description"]),
-            "assayComment": safe_str(row["New Comments"]),
-            "assayApprovalStatus": mapped_status,
-            "washBufferLotNum": safe_str(row["Wash Buffer Lot"]),
-            "instrumentOperator": safe_str(row["Instrument Operator"]),
-            "assayAPFRevNumber": safe_str(row["APF Rev Override"]),
-            "userId": user_id
-        }
-        response = session.post(urlSaveAssay, headers=headers, data=json.dumps(payload), verify=False)
-        if response.status_code == 200:
-            print(f"✅ Assay {payload['assayKey']}: Informations updated.")
-        else:
-            print(f"❌ Assay {payload['assayKey']}: Error {response.status_code} - {response.text[:200]}")
-
-# =========================================================
-# 4 Process second table for run order reagent packs
-# =========================================================
-if os.path.exists(Table2_path):
-    df = pd.read_csv(Table2_path, encoding="latin1")
-    # Group by Assay to combine multiple Reagent Packs
-    grouped = df.groupby("Assay")
-    for assay_key, group in grouped:
-        list_assay_reagent_pack = []
-        for _, row in group.iterrows():
-            reagent_pack = {
-                "userId": user_id,
-                "assayKey": safe_str(row["Assay"]),
-                "assayReagentPckKey": safe_str(row["ReagentPack Key"]),
-                "itemNum": safe_str(row["Item"]),
-                "lotNum": safe_str(row["Lot"]),
-                "packDesc": safe_str(row["Description"]),
-                "rapidNumber": safe_str(row["Rapid"]),
-                "rapidVersion": safe_str(row["Rapid Version"]),
-                "pipettor": safe_str(row["Pipettor"]),
-                "rowStatus": "Changed"
-            }
-            list_assay_reagent_pack.append(reagent_pack)
-        # Build the full payload for this assay
-        payload = {
-            "listAssayComponent": [],
-            "listAssayReagentPack": list_assay_reagent_pack,
-            "listAssayRunOrder": [],
-            "deleteTOList": [],
-            "overRideFlag": False
-        }
-        # Send POST request
-        response = session.post(urlSaveRunOrder, headers=headers, data=json.dumps(payload), verify=False)
-        if response.status_code == 200:
-            print(f"✅ Assay {assay_key}: Reagent Packs updated.")
-        else:
-            print(f"❌ Assay {assay_key}: Error {response.status_code} - {response.text[:200]}")
-
-# =========================================================
-# 5 Process third table for samples run order
-# =========================================================
-if os.path.exists(Table3_path):
-    df = pd.read_csv(Table3_path, encoding="latin1")
-    # Group by Assay to combine multiple Reagent Packs
-    grouped = df.groupby("Assay")
-    for assay_key, group in grouped:
-        list_assay_run_order = []
-        for _, row in group.iterrows():
-            run_order = {
-                "userId": user_id,
-                "assayKey": safe_str(row["Assay"]),
-                "assayRunOrderKey": safe_str(row["Run Order Key"]),
-                "sampleKey": safe_str(row["Sample Key"]),
-                "runOrderSequence": safe_str(row["#"]),
-                "lotNumber": safe_str(row["Lot"]),
-                "repCount": safe_str(row["Reps"]),
-                "calibGroup": safe_str(row["Cal Grp"]),
-                "tubePosition": safe_str(row["Tube Pos"]),
-                "pipettor": safe_str(row["Pipettor"]),
-                "sampleComment": safe_str(row["Comment"]),
-                "itemNumber": safe_str(row["Item"]),
-                "sampleCategoryKey": safe_str(row["SampleCategoryKey"]),
-                "rowStatus": "Changed"
-            }
-            list_assay_run_order.append(run_order)
-        # Build the full payload for this assay
-        payload = {
-            "listAssayComponent": [],
-            "listAssayReagentPack": [],
-            "listAssayRunOrder": list_assay_run_order,
-            "deleteTOList": [],
-            "overRideFlag": False
-        }
-        # Send POST request
-        response = session.post(urlSaveRunOrder, headers=headers, data=json.dumps(payload), verify=False)
-        if response.status_code == 200:
-            print(f"✅ Assay {assay_key}: Samples updated.")
-        else:
-            print(f"❌ Assay {assay_key}: Error {response.status_code} - {response.text[:200]}")
-
-driver.quit()
-print(f"\033[92m📊 Script completed.\033[0m")
-print(f"\033[94m➡️ You may now close this window and return to the Macro Workbook.\033[0m")
 time.sleep(5)
