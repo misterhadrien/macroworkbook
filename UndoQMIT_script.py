@@ -23,9 +23,9 @@ urlUndoQMIT = "https://locadampapp01.beckman.com:8443/adamWebTier/app/undoQmit/"
 
 def read_assay_keys_from_txt():
     temp_path = os.environ.get("TEMP") or "/tmp"
-    txt_path = os.path.join(temp_path, "EDMS_documents_names.txt")
+    txt_path = os.path.join(temp_path, "UndoQMIT_Assays.txt")
     if not os.path.exists(txt_path):
-        print(f"\033[91m❌ Error: Document names not found.\033[0m")
+        print(f"\033[91m❌ Error: Assay keys list not found.\033[0m")
         exit(1)
     with open(txt_path, "r", encoding="utf-8") as f:
         return [line.strip() for line in f if line.strip()]
