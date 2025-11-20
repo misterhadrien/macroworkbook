@@ -80,16 +80,18 @@ for cookie in driver.get_cookies():
 # Process undo qmit for each assay
 # =========================================================
 print("\033[94m🔄 Starting Undo QMIT requests...\033[0m")
-for assay_key in assay_keys:
+total = len(assay_keys)
+for index, assay_key in enumerate(assay_keys, start=1):
+    print(f"\033[96m➡️  [{index}/{total}] Processing assay: {assay_key}\033[0m")
     url = urlUndoQMIT + assay_key
     try:
         response = session.get(url, verify=False, timeout=120) 
         if response.status_code == 200:
-            print(f"\033[92m✅ Undo QMIT successful for assay: {assay_key}\033[0m")
+            print(f"\033[92m   ✔ Undo QMIT successful\033[0m")
         else:
-            print(f"\033[93m⚠️ Undo QMIT failed for assay: {assay_key} (HTTP {response.status_code})\033[0m")
+            print(f"\033[93m   ⚠ Undo QMIT failed (HTTP {response.status_code})\033[0m")
     except requests.exceptions.RequestException as e:
-        print(f"\033[91m❌ Undo QMIT request error for assay: {assay_key} - {e}\033[0m")
+        print(f"\033[91m   ❌ Request error - {e}\033[0m")
         
 driver.quit()
 print(f"\033[92m📊 Script completed.\033[0m")
