@@ -13,6 +13,7 @@ import ctypes
 import requests
 import json
 import urllib3
+import json
 
 # ---- Settings ----
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -21,7 +22,8 @@ screen_width = user32.GetSystemMetrics(0)
 screen_height = user32.GetSystemMetrics(1)
 options = webdriver.ChromeOptions()
 options.add_argument("--log-level=3")
-service = Service()
+options.add_argument("--silent")
+service = Service(log_path="NUL")
 temp_path = os.environ.get("TEMP") or "/tmp"
 Table1_path = os.path.join(temp_path, "Edit_ADAM_Table1.csv")
 Table2_path = os.path.join(temp_path, "Edit_ADAM_Table2.csv")
@@ -36,6 +38,13 @@ status_map = {
 urlSaveAssay = "https://locadampapp01.beckman.com:8443/adamWebTier/app/saveAssay"
 urlSaveRunOrder = "https://locadampapp01.beckman.com:8443/adamWebTier/app/saveRunorder"
 headers = {"Content-Type": "application/json"}
+LOGIN_CHECK_URL = "https://locadampapp01.beckman.com:8443/adamWebTier/app/assay?assaykey=769600"
+LOGIN_URL = "https://locadampapp01.beckman.com:8443/adamWebTier/login"
+temp_path = os.environ.get("TEMP") or "/tmp"
+COOKIE_FILE = os.path.join(temp_path, "adam_cookies.json")
+session = requests.Session()
+
+# ---- Helpers ----
 def safe_str(value):
     #"""Convert values safely for JSON payloads."""
     if pd.isna(value) or str(value).strip().lower() == "nan":
@@ -44,9 +53,19 @@ def safe_str(value):
         return str(int(value))
     return str(value).strip()
     
-# =========================================================
-# 1️ Open Chrome and wait for manual login
-# =========================================================
+def cookies_are_valid(session):
+    try:
+        response = session.get(
+            LOGIN_CHECK_URL,
+            verify=False,
+            timeout=15,
+            allow_redirects=False
+        )
+        return response.status_code == 200
+    except requests.exceptions.RequestException:
+        return False
+    
+# ---- Header ----
 print("\n" + "=" * 70)
 print("📄  ADAM Editor - Macro Workbook 🧾".center(70))
 print("=" * 70)
@@ -55,42 +74,52 @@ print("""
 🔄  After login, please wait until the script finish.
 """)
 print("=" * 70 + "\n")
-try:
-    print("\033[92m🌐 Chrome browser will now open. Please log in to ADAM manually.\033[0m")
-    driver = webdriver.Chrome(service=service, options=options)
-    driver.set_window_size(screen_width // 2, screen_height)
-    driver.set_window_position(0, 0)
-    driver.get("https://locadampapp01.beckman.com:8443/adamWebTier/login")
-    print("\033[94m🔐 Waiting for login to complete...\033[0m")
+
+# ---- Retrieve cookie ----
+need_login = True
+if os.path.exists(COOKIE_FILE):
     try:
-        user_id_element = WebDriverWait(driver, 300).until(
+        with open(COOKIE_FILE, "r", encoding="utf-8") as f:
+            cookies = json.load(f)
+        for cookie in cookies:
+            session.cookies.set(cookie["name"], cookie["value"])
+        if cookies_are_valid(session):
+            print("\033[92m✅ You are already authenticated. Login has been skipped.\033[0m")
+            need_login = False
+        else:
+            session.cookies.clear()
+    except Exception as e:
+        session.cookies.clear()
+
+# ---- Manual login ----
+if need_login:
+    try:
+        print("\033[92m🌐 Chrome browser will now open. Please log in to ADAM manually.\033[0m")
+        driver = webdriver.Chrome(service=service, options=options)
+        driver.set_window_size(screen_width // 2, screen_height)
+        driver.set_window_position(0, 0)
+        driver.get(LOGIN_URL)
+        print("\033[94m🔐 Waiting for login to complete...\033[0m")
+        WebDriverWait(driver, 300).until(
             EC.presence_of_element_located((By.ID, "userIdData"))
         )
+        print("\033[92m✅ Login successful!\033[0m")
+        cookies = driver.get_cookies()
+        with open(COOKIE_FILE, "w", encoding="utf-8") as f:
+            json.dump(cookies, f)
+        session.cookies.clear()
+        for cookie in cookies:
+            session.cookies.set(cookie["name"], cookie["value"])
+        driver.quit()
     except TimeoutException:
         print("\033[91m❌ Error: Login timed out.\033[0m")
         driver.quit()
         exit(1)
-    print("\033[92m✅ Login successful!\033[0m")
-    user_id = user_id_element.get_attribute("value")
-except WebDriverException as e:
-    time.sleep(1)
-    print("\n\033[91m❌ Error: Chrome browser was closed unexpectedly.\033[0m")
-    time.sleep(5)
-except Exception as e:
-    time.sleep(1)
-    print(f"\033[91m❌ Error: An unexpected error occurred: {e}\033[0m")
-    time.sleep(5)
+    except WebDriverException:
+        print("\033[91m❌ Chrome was closed unexpectedly.\033[0m")
+        exit(1)
 
-# =========================================================
-# 2️ Extract cookies from Selenium to reuse with requests
-# =========================================================
-session = requests.Session()
-for cookie in driver.get_cookies():
-    session.cookies.set(cookie['name'], cookie['value'])
-
-# =========================================================
-# 3️ Process first table for adam assay informations
-# =========================================================
+# ---- Process first table for adam assay informations ----
 if os.path.exists(Table1_path):
     df = pd.read_csv(Table1_path, encoding="latin1")
     for _, row in df.iterrows():
@@ -103,8 +132,7 @@ if os.path.exists(Table1_path):
             "assayApprovalStatus": mapped_status,
             "washBufferLotNum": safe_str(row["Wash Buffer Lot"]),
             "instrumentOperator": safe_str(row["Instrument Operator"]),
-            "assayAPFRevNumber": safe_str(row["APF Rev Override"]),
-            "userId": user_id
+            "assayAPFRevNumber": safe_str(row["APF Rev Override"])
         }
         response = session.post(urlSaveAssay, headers=headers, data=json.dumps(payload), verify=False)
         if response.status_code == 200:
@@ -112,9 +140,7 @@ if os.path.exists(Table1_path):
         else:
             print(f"❌ Assay {payload['assayKey']}: Error {response.status_code} - {response.text[:200]}")
 
-# =========================================================
-# 4 Process second table for run order reagent packs
-# =========================================================
+# ---- Process second table for run order reagent packs ----
 if os.path.exists(Table2_path):
     df = pd.read_csv(Table2_path, encoding="latin1")
     # Group by Assay to combine multiple Reagent Packs
@@ -123,7 +149,6 @@ if os.path.exists(Table2_path):
         list_assay_reagent_pack = []
         for _, row in group.iterrows():
             reagent_pack = {
-                "userId": user_id,
                 "assayKey": safe_str(row["Assay"]),
                 "assayReagentPckKey": safe_str(row["ReagentPack Key"]),
                 "itemNum": safe_str(row["Item"]),
@@ -150,9 +175,7 @@ if os.path.exists(Table2_path):
         else:
             print(f"❌ Assay {assay_key}: Error {response.status_code} - {response.text[:200]}")
 
-# =========================================================
-# 5 Process third table for samples run order
-# =========================================================
+# ---- Process third table for samples run order ----
 if os.path.exists(Table3_path):
     df = pd.read_csv(Table3_path, encoding="latin1")
     # Group by Assay to combine multiple Reagent Packs
@@ -161,7 +184,6 @@ if os.path.exists(Table3_path):
         list_assay_run_order = []
         for _, row in group.iterrows():
             run_order = {
-                "userId": user_id,
                 "assayKey": safe_str(row["Assay"]),
                 "assayRunOrderKey": safe_str(row["Run Order Key"]),
                 "sampleKey": safe_str(row["Sample Key"]),
@@ -191,8 +213,6 @@ if os.path.exists(Table3_path):
             print(f"✅ Assay {assay_key}: Samples updated.")
         else:
             print(f"❌ Assay {assay_key}: Error {response.status_code} - {response.text[:200]}")
-
-driver.quit()
 print(f"\033[92m📊 Script completed.\033[0m")
 print(f"\033[94m➡️ You may now close this window and return to the Macro Workbook.\033[0m")
-time.sleep(5)
+time.sleep(3)
