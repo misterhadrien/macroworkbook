@@ -115,9 +115,9 @@ for index, assay_key in enumerate(assay_keys, start=1):
     try:
         response = session.get(url, verify=False, timeout=120) 
         if response.status_code == 200:
-            print(f"\033[92m   ✔ QMIT successful\033[0m")
+            print(f"\033[92m   ✔ UNDO QMIT successful\033[0m")
         else:
-            print(f"\033[93m   ⚠ QMIT failed (HTTP {response.status_code})\033[0m")
+            print(f"\033[93m   ⚠ UNDO QMIT failed (HTTP {response.status_code})\033[0m")
     except requests.exceptions.RequestException as e:
         print(f"\033[91m   ❌ Request error - {e}\033[0m")        
 print(f"\033[92m📊 Script completed.\033[0m")
