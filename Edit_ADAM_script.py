@@ -6,6 +6,7 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.chrome.service import Service
 from datetime import datetime
+from bs4 import BeautifulSoup
 import pandas as pd
 import time
 import os
@@ -64,6 +65,17 @@ def cookies_are_valid(session):
         return response.status_code == 200
     except requests.exceptions.RequestException:
         return False
+        
+def get_logged_user_id(session):
+    try:
+        response = session.get(LOGIN_CHECK_URL, verify=False, timeout=15)
+        soup = BeautifulSoup(response.text, "html.parser")
+        user_id_input = soup.find("input", id="userIdData")
+        if user_id_input:
+            return user_id_input.get("value")
+    except requests.exceptions.RequestException:
+        pass
+    return None
     
 # ---- Header ----
 print("\n" + "=" * 70)
@@ -119,6 +131,12 @@ if need_login:
         print("\033[91m❌ Chrome was closed unexpectedly.\033[0m")
         exit(1)
 
+# ---- Get User ID ----
+user_id = get_logged_user_id(session)
+if not user_id:
+    print("\033[91m❌ Could not retrieve logged-in user ID.\033[0m")
+    exit(1)
+
 # ---- Process first table for adam assay informations ----
 if os.path.exists(Table1_path):
     df = pd.read_csv(Table1_path, encoding="latin1")
@@ -132,7 +150,8 @@ if os.path.exists(Table1_path):
             "assayApprovalStatus": mapped_status,
             "washBufferLotNum": safe_str(row["Wash Buffer Lot"]),
             "instrumentOperator": safe_str(row["Instrument Operator"]),
-            "assayAPFRevNumber": safe_str(row["APF Rev Override"])
+            "assayAPFRevNumber": safe_str(row["APF Rev Override"]),
+            "userId": user_id
         }
         response = session.post(urlSaveAssay, headers=headers, data=json.dumps(payload), verify=False)
         if response.status_code == 200:
@@ -157,7 +176,8 @@ if os.path.exists(Table2_path):
                 "rapidNumber": safe_str(row["Rapid"]),
                 "rapidVersion": safe_str(row["Rapid Version"]),
                 "pipettor": safe_str(row["Pipettor"]),
-                "rowStatus": "Changed"
+                "rowStatus": "Changed",
+                "userId": user_id
             }
             list_assay_reagent_pack.append(reagent_pack)
         # Build the full payload for this assay
@@ -196,7 +216,8 @@ if os.path.exists(Table3_path):
                 "sampleComment": safe_str(row["Comment"]),
                 "itemNumber": safe_str(row["Item"]),
                 "sampleCategoryKey": safe_str(row["SampleCategoryKey"]),
-                "rowStatus": "Changed"
+                "rowStatus": "Changed",
+                "userId": user_id
             }
             list_assay_run_order.append(run_order)
         # Build the full payload for this assay
